@@ -1,0 +1,31 @@
+name: Gerar APK Automático
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Baixar o código do projeto
+      uses: actions/checkout@v4
+
+    - name: Configurar o Java
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Dar permissão ao Gradle
+      run: chmod +x ./gradlew
+
+    - name: Compilar o APK
+      run: ./gradlew assembleDebug
+
+    - name: Disponibilizar o arquivo APK para download
+      uses: actions/upload-artifact@v4
+      with:
+        name: meu-aplicativo
+        path: app/build/outputs/apk/debug/app-debug.apk
