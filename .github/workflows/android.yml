@@ -6,24 +6,31 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Baixar o código do projeto
       uses: actions/checkout@v4
 
-    - name: Configurar o Java
-      uses: actions/setup-java@v4
+    - name: Configurar o Python
+      uses: actions/setup-python@v5
       with:
-        distribution: 'temurin'
-        java-version: '17'
+        python-version: '3.11'
 
+    - name: Instalar dependências de compilação
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential libsqlite3-dev ffmpeg libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev libavcodec-dev zlib1g-dev
+        sudo apt-get install -y libgstreamer1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav libmtdev-dev xclip xsel libjpeg-dev
+        pip install --upgrade pip
+        pip install buildozer cython virtualenv
 
-    - name: Compilar o APK
-      run: ./gradlew assembleDebug
+    - name: Compilar o APK com Buildozer
+      run: |
+        yes | buildozer android debug
 
     - name: Disponibilizar o arquivo APK para download
       uses: actions/upload-artifact@v4
       with:
         name: meu-aplicativo
-        path: app/build/outputs/apk/debug/app-debug.apk
+        path: .buildozer/android/platform/build-armeabi-v7a_arm64-v8a/dists/controlegastosapp__armeabi-v7a_arm64-v8a/build/outputs/apk/debug/*.apk
