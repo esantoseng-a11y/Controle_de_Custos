@@ -12,6 +12,12 @@ jobs:
     - name: Baixar o código do projeto
       uses: actions/checkout@v4
 
+    - name: Configurar o Java 17 (Necessário para o Gradle)
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
     - name: Configurar o Python
       uses: actions/setup-python@v5
       with:
@@ -33,4 +39,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: meu-aplicativo
-        path: .buildozer/android/platform/build-armeabi-v7a_arm64-v8a/dists/controlegastosapp__armeabi-v7a_arm64-v8a/build/outputs/apk/debug/*.apk
+        path: .buildozer/android/platform/build-armeabi-v7a_
