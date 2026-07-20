@@ -39,4 +39,4 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: meu-aplicativo
-        path: .buildozer/android/platform/build-armeabi-v7a_
+        path: bin/*.apk
