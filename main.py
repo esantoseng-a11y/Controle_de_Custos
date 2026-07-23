@@ -1,13 +1,10 @@
 import sqlite3
-import tempfile
-import os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import streamlit as st
 
 st.set_page_config(page_title="Controle de Custos", page_icon="💰", layout="centered")
 
-# Banco de dados persistente na pasta do projeto
 DB_NAME = "controle_gastos_v4.db"
 
 def inicializar_banco():
@@ -40,7 +37,7 @@ def inicializar_banco():
 
 inicializar_banco()
 
-# Gerenciamento de Sessão de Login
+# Gerenciamento de Sessão
 if "usuario_logado" not in st.session_state:
     st.session_state["usuario_logado"] = None
 
@@ -86,11 +83,11 @@ if not st.session_state["usuario_logado"]:
 else:
     usuario_ativo = st.session_state["usuario_logado"]
     
-    # Cabeçalho
+    # Cabeçalho com Logout Seguro
     col_t, col_l = st.columns([3, 1])
     col_t.title(f"Finanças de {usuario_ativo}")
     if col_l.button("Sair"):
-        st.session_state["usuario_logado"] = None
+        st.session_state.clear()  # Limpa o estado para evitar erros ao trocar de usuário
         st.rerun()
 
     # Função aux de cartões
@@ -193,7 +190,7 @@ else:
                 st.success("Lançamento salvo com sucesso!")
                 st.rerun()
 
-    # Lista de Lançamentos
+    # Lista e Edição de Lançamentos
     st.subheader(f"📋 Lançamentos de {mes_filtro}")
     conexao = sqlite3.connect(DB_NAME)
     cursor = conexao.cursor()
@@ -204,14 +201,54 @@ else:
     if itens:
         for id_l, d, v, t, c, dt_s in itens:
             cor = "🔴" if t == "Despesa" else "🟢"
-            col_a, col_b = st.columns([4, 1])
-            col_a.write(f"{cor} **{d}** — R$ {v:.2f} ({c} em {dt_s})")
-            if col_b.button("Apagar", key=f"del_{id_l}"):
-                conexao = sqlite3.connect(DB_NAME)
-                cursor = conexao.cursor()
-                cursor.execute("DELETE FROM lancamentos WHERE id = ?", (id_l,))
-                conexao.commit()
-                conexao.close()
-                st.rerun()
+            
+            with st.expander(f"{cor} {d} — R$ {v:.2f} ({c} em {dt_s})"):
+                with st.form(key=f"edit_form_{id_l}"):
+                    edit_desc = st.text_input("Descrição", value=d)
+                    edit_val = st.number_input("Valor (R$)", min_value=0.0, step=0.01, value=float(v))
+                    
+                    try:
+                        data_obj = datetime.strptime(dt_s, "%d/%m/%Y")
+                    except ValueError:
+                        data_obj = datetime.now()
+                        
+                    edit_dt = st.date_input("Data", value=data_obj)
+                    
+                    idx_cartao = cartoes.index(c) if c in cartoes else 0
+                    edit_cartao = st.selectbox("Conta/Cartão", cartoes if cartoes else ["Sem conta cadastrada"], index=idx_cartao)
+                    
+                    idx_tipo = 0 if t == "Despesa" else 1
+                    edit_tipo = st.radio("Tipo", ["Despesa", "Receita"], index=idx_tipo, horizontal=True)
+                    
+                    col_btn1, col_btn2 = st.columns(2)
+                    salvar = col_btn1.form_submit_button("💾 Salvar Alterações", type="primary")
+                    
+                    if salvar:
+                        if not edit_desc or edit_val <= 0:
+                            st.error("Descrição e Valor devem ser preenchidos corretamente.")
+                        else:
+                            nova_m_fmt = edit_dt.strftime("%m/%Y")
+                            nova_d_fmt = edit_dt.strftime("%d/%m/%Y")
+                            
+                            conexao = sqlite3.connect(DB_NAME)
+                            cursor = conexao.cursor()
+                            cursor.execute("""
+                                UPDATE lancamentos 
+                                SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ?
+                                WHERE id = ? AND usuario = ?
+                            """, (edit_desc, edit_val, nova_d_fmt, nova_m_fmt, edit_cartao, edit_tipo, id_l, usuario_ativo))
+                            conexao.commit()
+                            conexao.close()
+                            st.success("Lançamento atualizado!")
+                            st.rerun()
+
+                if st.button("🗑️ Apagar Lançamento", key=f"del_{id_l}"):
+                    conexao = sqlite3.connect(DB_NAME)
+                    cursor = conexao.cursor()
+                    cursor.execute("DELETE FROM lancamentos WHERE id = ? AND usuario = ?", (id_l, usuario_ativo))
+                    conexao.commit()
+                    conexao.close()
+                    st.success("Removido com sucesso!")
+                    st.rerun()
     else:
         st.info("Nenhum lançamento encontrado para este mês.")
