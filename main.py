@@ -21,11 +21,14 @@ def inicializar_banco():
     conexao = get_conexao()
     cursor = conexao.cursor()
     
+    # Adicionadas colunas para recuperação de senha (pergunta e resposta)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id SERIAL PRIMARY KEY,
             usuario VARCHAR(100) UNIQUE,
-            senha VARCHAR(255)
+            senha VARCHAR(255),
+            pergunta_sec TEXT,
+            resposta_sec TEXT
         )
     """)
     cursor.execute("""
@@ -54,7 +57,23 @@ def inicializar_banco():
     cursor.close()
     conexao.close()
 
+# Executa as migrations simples se o banco for SQLite local antigo sem as colunas novas
+def ajustar_schema():
+    if not DATABASE_URL:
+        conexao = get_conexao()
+        cursor = conexao.cursor()
+        try:
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN pergunta_sec TEXT")
+            cursor.execute("ALTER TABLE usuarios ADD COLUMN resposta_sec TEXT")
+            conexao.commit()
+        except sqlite3.OperationalError:
+            pass # Colunas já existem
+        finally:
+            cursor.close()
+            conexao.close()
+
 inicializar_banco()
+ajustar_schema()
 
 # --- SISTEMA DE MANTER LOGADO VIA QUERY PARAMS ---
 query_params = st.query_params
@@ -65,11 +84,11 @@ if "usuario_logado" not in st.session_state:
     else:
         st.session_state["usuario_logado"] = None
 
-# --- TELA DE LOGIN / CADASTRO ---
+# --- TELA DE LOGIN / CADASTRO / RECUPERAÇÃO ---
 if not st.session_state["usuario_logado"]:
     st.title("💰 Controle de Custos")
     
-    aba1, aba2 = st.tabs(["🔑 Entrar", "📝 Cadastrar"])
+    aba1, aba2, aba3 = st.tabs(["🔑 Entrar", "📝 Cadastrar", "🔑 Esqueci a Senha"])
     
     with aba1:
         u = st.text_input("Usuário", key="login_user")
@@ -80,41 +99,98 @@ if not st.session_state["usuario_logado"]:
             usuario_limpo = u.strip().lower()
             senha_limpa = s.strip()
             
-            conexao = get_conexao()
-            cursor = conexao.cursor()
-            cursor.execute("SELECT usuario FROM usuarios WHERE usuario = %s AND senha = %s" if DATABASE_URL else "SELECT usuario FROM usuarios WHERE usuario = ? AND senha = ?", (usuario_limpo, senha_limpa))
-            valido = cursor.fetchone()
-            cursor.close()
-            conexao.close()
-            
-            if valido:
-                st.session_state["usuario_logado"] = usuario_limpo
-                if manter_logado:
-                    st.query_params["user"] = usuario_limpo
-                st.rerun()
+            if not usuario_limpo or not senha_limpa:
+                st.warning("Preencha usuário e senha.")
             else:
-                st.error("Usuário ou senha incorretos.")
+                conexao = get_conexao()
+                cursor = conexao.cursor()
+                cursor.execute("SELECT usuario FROM usuarios WHERE usuario = %s AND senha = %s" if DATABASE_URL else "SELECT usuario FROM usuarios WHERE usuario = ? AND senha = ?", (usuario_limpo, senha_limpa))
+                valido = cursor.fetchone()
+                cursor.close()
+                conexao.close()
+                
+                if valido:
+                    st.session_state["usuario_logado"] = usuario_limpo
+                    if manter_logado:
+                        st.query_params["user"] = usuario_limpo
+                    st.rerun()
+                else:
+                    st.error("Usuário ou senha incorretos.")
 
     with aba2:
         u_cad = st.text_input("Novo Usuário", key="cad_user")
         s_cad = st.text_input("Nova Senha", type="password", key="cad_pass")
+        p_cad = st.selectbox("Pergunta de Segurança (para recuperar a senha)", [
+            "Qual o nome do seu primeiro animal de estimação?",
+            "Qual a sua cidade natal?",
+            "Qual o seu livro ou filme favorito?",
+            "Qual o nome da sua primeira escola?"
+        ], key="cad_perg")
+        r_cad = st.text_input("Resposta de Segurança", key="cad_resp")
         
-        if st.button("Cadastrar", use_container_width=True):
-            if u_cad and s_cad:
-                usuario_cad_limpo = u_cad.strip().lower()
-                senha_cad_limpa = s_cad.strip()
+        if st.button("Cadastrar Conta", use_container_width=True):
+            usuario_cad_limpo = u_cad.strip().lower()
+            senha_cad_limpa = s_cad.strip()
+            resp_cad_limpa = r_cad.strip().lower()
+            
+            if usuario_cad_limpo and senha_cad_limpa and resp_cad_limpa:
                 try:
                     conexao = get_conexao()
                     cursor = conexao.cursor()
-                    cursor.execute("INSERT INTO usuarios (usuario, senha) VALUES (%s, %s)" if DATABASE_URL else "INSERT INTO usuarios (usuario, senha) VALUES (?, ?)", (usuario_cad_limpo, senha_cad_limpa))
+                    sql_cad = "INSERT INTO usuarios (usuario, senha, pergunta_sec, resposta_sec) VALUES (%s, %s, %s, %s)" if DATABASE_URL else "INSERT INTO usuarios (usuario, senha, pergunta_sec, resposta_sec) VALUES (?, ?, ?, ?)"
+                    cursor.execute(sql_cad, (usuario_cad_limpo, senha_cad_limpa, p_cad, resp_cad_limpa))
                     conexao.commit()
                     cursor.close()
                     conexao.close()
-                    st.success("Cadastrado com sucesso! Volte à aba de Entrar.")
+                    st.success("Conta criada com sucesso! Acesse a aba 'Entrar' para fazer login.")
                 except Exception:
-                    st.error("Este nome de usuário já existe.")
+                    st.error("Este nome de usuário já está em uso. Escolha outro.")
             else:
-                st.warning("Preencha todos os campos.")
+                st.warning("Preencha todos os campos do cadastro.")
+
+    with aba3:
+        u_rec = st.text_input("Digite o seu Usuário", key="rec_user")
+        if u_rec:
+            usuario_rec_limpo = u_rec.strip().lower()
+            conexao = get_conexao()
+            cursor = conexao.cursor()
+            cursor.execute("SELECT pergunta_sec FROM usuarios WHERE usuario = %s" if DATABASE_URL else "SELECT pergunta_sec FROM usuarios WHERE usuario = ?", (usuario_rec_limpo,))
+            dados_user = cursor.fetchone()
+            cursor.close()
+            conexao.close()
+
+            if dados_user and dados_user[0]:
+                st.info(f"**Pergunta de Segurança:** {dados_user[0]}")
+                r_rec = st.text_input("Sua Resposta", key="rec_resp")
+                nova_senha = st.text_input("Nova Senha", type="password", key="rec_new_pass")
+
+                if st.button("Redefinir Senha", use_container_width=True):
+                    resp_rec_limpa = r_rec.strip().lower()
+                    nova_senha_limpa = nova_senha.strip()
+
+                    if resp_rec_limpa and nova_senha_limpa:
+                        conexao = get_conexao()
+                        cursor = conexao.cursor()
+                        cursor.execute("SELECT id FROM usuarios WHERE usuario = %s AND resposta_sec = %s" if DATABASE_URL else "SELECT id FROM usuarios WHERE usuario = ? AND resposta_sec = ?", (usuario_rec_limpo, resp_rec_limpa))
+                        valido = cursor.fetchone()
+
+                        if valido:
+                            sql_up = "UPDATE usuarios SET senha = %s WHERE usuario = %s" if DATABASE_URL else "UPDATE usuarios SET senha = ? WHERE usuario = ?"
+                            cursor.execute(sql_up, (nova_senha_limpa, usuario_rec_limpo))
+                            conexao.commit()
+                            cursor.close()
+                            conexao.close()
+                            st.success("Senha alterada com sucesso! Você já pode entrar.")
+                        else:
+                            cursor.close()
+                            conexao.close()
+                            st.error("Resposta incorreta.")
+                    else:
+                        st.warning("Preencha a resposta e a nova senha.")
+            elif dados_user:
+                st.warning("Este usuário foi cadastrado antes do recurso de recuperação. Entre em contato com o suporte/administrador.")
+            else:
+                st.error("Usuário não encontrado.")
 
 # --- PAINEL PRINCIPAL DO APP ---
 else:
@@ -246,7 +322,6 @@ else:
     conexao.close()
 
     if itens:
-        # Usamos enumerate (idx) para garantir uma key única no Streamlit mesmo se id_l for None/inválido
         for idx, (id_l, d, v, t, c, dt_s) in enumerate(itens):
             cor = "🔴" if t == "Despesa" else "🟢"
             
@@ -306,4 +381,3 @@ else:
                     st.rerun()
     else:
         st.info("Nenhum lançamento encontrado para este mês.")
-
