@@ -289,7 +289,7 @@ else:
 
     st.divider()
 
-    # --- NOVO LANÇAMENTO (MANUAL OU SCANNER DE COMPROVANTE/IMAGENS) ---
+    # --- LANÇAMENTO (MANUAL E SCANNER CORRIGIDO) ---
     aba_manual, aba_ocr = st.tabs(["✍️ Manual", "📷 Escanear Imagem/Comprovante"])
 
     with aba_manual:
@@ -332,10 +332,10 @@ else:
                     st.success("Lançamento salvo com sucesso!")
                     st.rerun()
 
-    # --- OPÇÃO 2: ESCANEAR LINHA A LINHA COM VALORES NUMÉRICOS ---
+    # --- ABA OCR CORRIGIDA ---
     with aba_ocr:
         st.subheader("📷 Extrair Linhas com Valores Numéricos")
-        st.caption("Envie uma foto de um recibo, fatura ou nota. A IA extrairá apenas os itens que possuem valor numérico.")
+        st.caption("Envie uma foto de um recibo, fatura ou nota. A IA extrairá apenas os itens com valores.")
 
         arquivo_imagem = st.file_uploader(
             "Selecione uma imagem do comprovante ou produto", 
@@ -348,85 +348,84 @@ else:
             if st.button("🔍 Processar Imagem e Extrair Itens", type="primary"):
                 api_key = os.getenv("GEMINI_API_KEY")
                 
-                if not (NOVO_SDK or SDK_ANTIGO):
-                    st.error("Nenhuma biblioteca 'google-genai' ou 'google-generativeai' está instalada.")
-                elif not api_key:
-                    st.error("Variável GEMINI_API_KEY não configurada no Render/Ambiente.")
+                if not api_key:
+                    st.error("A variável 'GEMINI_API_KEY' não está configurada nas variáveis de ambiente.")
+                elif not (NOVO_SDK or SDK_ANTIGO):
+                    st.error("Instale 'google-genai' no seu arquivo requirements.txt.")
                 else:
-                    with st.spinner("Analisando imagem e extraindo linhas com valores..."):
-                        try:
-                            img = Image.open(arquivo_imagem)
-                            prompt = """
-                            Analise a imagem fornecida (comprovante, nota, recibo ou extrato).
-                            Identifique TODAS as linhas ou itens que possuem um VALOR NUMÉRICO associado (preço, custo, taxa, etc.).
-                            Ignore linhas que sejam apenas textos, cabeçalhos ou sem valores.
+                    with st.spinner("Analisando imagem com o Gemini..."):
+                        texto_resposta = None
+                        erros_encontrados = []
+                        img = Image.open(arquivo_imagem)
+                        
+                        prompt = """
+                        Analise a imagem fornecida (comprovante, nota, recibo ou extrato).
+                        Identifique TODAS as linhas ou itens que possuem um VALOR NUMÉRICO associado (preço, custo, taxa, etc.).
+                        Ignore linhas que sejam apenas textos, cabeçalhos ou sem valores.
 
-                            Retorne EXATAMENTE um JSON com o seguinte formato:
+                        Retorne EXATAMENTE um JSON no seguinte formato sem texto em volta:
+                        {
+                          "data_geral": "YYYY-MM-DD",
+                          "itens": [
                             {
-                              "data_geral": "YYYY-MM-DD",
-                              "itens": [
-                                {
-                                  "descricao": "nome do item ou descrição da linha",
-                                  "valor": 12.50,
-                                  "tipo": "Despesa"
-                                }
-                              ]
+                              "descricao": "nome do item ou linha",
+                              "valor": 12.50,
+                              "tipo": "Despesa"
                             }
+                          ]
+                        }
+                        Se não encontrar a data, use a data de hoje.
+                        """
 
-                            Se não encontrar a data, use a data de hoje.
-                            Responda estritamente o JSON válido.
-                            """
-
-                            texto_resposta = None
-
-                            # Tativa 1: Usando a biblioteca nova (google-genai)
-                            if NOVO_SDK:
+                        # TENTATIVA 1: Novo SDK (google-genai)
+                        if NOVO_SDK:
+                            try:
                                 client = genai.Client(api_key=api_key)
-                                modelos_tentativa = ['gemini-2.5-flash', 'gemini-1.5-flash']
-                                
-                                for mod in modelos_tentativa:
+                                # Formatos de nome aceitos na versão estável do SDK
+                                for m in ['gemini-2.5-flash', 'gemini-1.5-flash', 'models/gemini-2.5-flash']:
                                     try:
-                                        res = client.models.generate_content(model=mod, contents=[img, prompt])
-                                        texto_resposta = res.text
-                                        if texto_resposta:
+                                        res = client.models.generate_content(model=m, contents=[img, prompt])
+                                        if res and res.text:
+                                            texto_resposta = res.text
                                             break
-                                    except Exception:
-                                        continue
+                                    except Exception as ex:
+                                        erros_encontrados.append(f"Modelo '{m}': {ex}")
+                            except Exception as ex:
+                                erros_encontrados.append(f"Erro ao inicializar genai.Client: {ex}")
 
-                            # Tentativa 2: Usando a biblioteca legada se a nova falhar ou não estiver disponível
-                            if not texto_resposta and SDK_ANTIGO:
+                        # TENTATIVA 2: SDK Legado (google-generativeai) caso o novo falhe
+                        if not texto_resposta and SDK_ANTIGO:
+                            try:
                                 legacy_genai.configure(api_key=api_key)
-                                modelos_legacy = ['gemini-1.5-flash', 'gemini-pro-vision']
-                                
-                                for mod in modelos_legacy:
+                                for m in ['gemini-1.5-flash', 'gemini-pro-vision']:
                                     try:
-                                        model_inst = legacy_genai.GenerativeModel(mod)
+                                        model_inst = legacy_genai.GenerativeModel(m)
                                         res = model_inst.generate_content([prompt, img])
-                                        texto_resposta = res.text
-                                        if texto_resposta:
+                                        if res and res.text:
+                                            texto_resposta = res.text
                                             break
-                                    except Exception:
-                                        continue
+                                    except Exception as ex:
+                                        erros_encontrados.append(f"Legacy '{m}': {ex}")
+                            except Exception as ex:
+                                erros_encontrados.append(f"Erro no SDK legado: {ex}")
 
-                            if not texto_resposta:
-                                raise Exception("Não foi possível conectar a nenhum modelo da Google API.")
+                        # TRATAMENTO DO RESULTADO
+                        if texto_resposta:
+                            try:
+                                json_match = re.search(r'\{.*\}', texto_resposta, re.DOTALL)
+                                json_str = json_match.group(0) if json_match else texto_resposta.strip()
+                                dados = json.loads(json_str)
+                                
+                                st.session_state["ocr_dados_itens"] = dados
+                                st.success(f"{len(dados.get('itens', []))} item(ns) encontrado(s)! Revise abaixo antes de salvar.")
+                            except Exception as parse_error:
+                                st.error(f"Erro ao interpretar o retorno da IA: {parse_error}")
+                        else:
+                            st.error("Não foi possível conectar à API do Gemini. Detalhes do erro:")
+                            for err in erros_encontrados:
+                                st.warning(err)
 
-                            # Extração Segura do JSON via Regex
-                            json_match = re.search(r'\{.*\}', texto_resposta, re.DOTALL)
-                            if json_match:
-                                json_str = json_match.group(0)
-                            else:
-                                json_str = texto_resposta.strip()
-
-                            dados = json.loads(json_str)
-                            
-                            st.session_state["ocr_dados_itens"] = dados
-                            st.success(f"{len(dados.get('itens', []))} item(ns) encontrado(s)! Revise antes de lançar.")
-
-                        except Exception as e:
-                            st.error(f"Erro ao analisar comprovante: {e}")
-
-        # Se itens foram extraídos, mostra para confirmação em lote
+        # CONFIRMAÇÃO E EDIÇÃO EM LOTE DOS ITENS DETECTADOS
         if "ocr_dados_itens" in st.session_state and st.session_state["ocr_dados_itens"]:
             dados_extraidos = st.session_state["ocr_dados_itens"]
             lista_itens = dados_extraidos.get("itens", [])
@@ -475,7 +474,7 @@ else:
                     st.success(f"{qtd_salva} lançamento(s) salvos com sucesso!")
                     st.rerun()
 
-    # --- LISTA E EDICÃO DOS LANÇAMENTOS ---
+    # --- LISTA E EDIÇÃO DOS LANÇAMENTOS ---
     st.subheader(f"📋 Lançamentos de {mes_filtro}")
     conexao = get_conexao()
     cursor = conexao.cursor()
