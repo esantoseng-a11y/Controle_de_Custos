@@ -1,4 +1,3 @@
-
 import os
 import sqlite3
 from datetime import datetime
@@ -57,11 +56,10 @@ def inicializar_banco():
 
 inicializar_banco()
 
-# --- SISTEMA DE MANTER LOGADO VIA QUERY PARAMS (Sem bibliotecas extras) ---
+# --- SISTEMA DE MANTER LOGADO VIA QUERY PARAMS ---
 query_params = st.query_params
 
 if "usuario_logado" not in st.session_state:
-    # Se o parâmetro 'user' estiver na URL, loga automaticamente
     if "user" in query_params:
         st.session_state["usuario_logado"] = query_params["user"]
     else:
@@ -248,11 +246,12 @@ else:
     conexao.close()
 
     if itens:
-        for id_l, d, v, t, c, dt_s in itens:
+        # Usamos enumerate (idx) para garantir uma key única no Streamlit mesmo se id_l for None/inválido
+        for idx, (id_l, d, v, t, c, dt_s) in enumerate(itens):
             cor = "🔴" if t == "Despesa" else "🟢"
             
             with st.expander(f"{cor} {d} — R$ {v:.2f} ({c} em {dt_s})"):
-                with st.form(key=f"edit_form_{id_l}"):
+                with st.form(key=f"edit_form_{id_l}_{idx}"):
                     edit_desc = st.text_input("Descrição", value=d)
                     edit_val = st.number_input("Valor (R$)", min_value=0.0, step=0.01, value=float(v))
                     
@@ -279,26 +278,27 @@ else:
                             
                             conexao = get_conexao()
                             cursor = conexao.cursor()
-                            sql_update = """
-                                UPDATE lancamentos 
-                                SET descricao = %s, valor = %s, data = %s, mes_ano = %s, cartao = %s, tipo = %s
-                                WHERE id = %s AND usuario = %s
-                            """ if DATABASE_URL else """
-                                UPDATE lancamentos 
-                                SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ?
-                                WHERE id = ? AND usuario = ?
-                            """
-                            cursor.execute(sql_update, (edit_desc, edit_val, nova_d_fmt, nova_m_fmt, edit_cartao, edit_tipo, id_l, usuario_ativo))
+                            
+                            if id_l is not None:
+                                sql_update = "UPDATE lancamentos SET descricao = %s, valor = %s, data = %s, mes_ano = %s, cartao = %s, tipo = %s WHERE id = %s AND usuario = %s" if DATABASE_URL else "UPDATE lancamentos SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ? WHERE id = ? AND usuario = ?"
+                                cursor.execute(sql_update, (edit_desc, edit_val, nova_d_fmt, nova_m_fmt, edit_cartao, edit_tipo, id_l, usuario_ativo))
+                            else:
+                                sql_update = "UPDATE lancamentos SET descricao = %s, valor = %s, data = %s, mes_ano = %s, cartao = %s, tipo = %s WHERE usuario = %s AND descricao = %s AND valor = %s" if DATABASE_URL else "UPDATE lancamentos SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ? WHERE usuario = ? AND descricao = ? AND valor = ?"
+                                cursor.execute(sql_update, (edit_desc, edit_val, nova_d_fmt, nova_m_fmt, edit_cartao, edit_tipo, usuario_ativo, d, v))
+                                
                             conexao.commit()
                             cursor.close()
                             conexao.close()
                             st.success("Lançamento atualizado!")
                             st.rerun()
 
-                if st.button("🗑️ Apagar Lançamento", key=f"del_{id_l}"):
+                if st.button("🗑️ Apagar Lançamento", key=f"del_{id_l}_{idx}"):
                     conexao = get_conexao()
                     cursor = conexao.cursor()
-                    cursor.execute("DELETE FROM lancamentos WHERE id = %s AND usuario = %s" if DATABASE_URL else "DELETE FROM lancamentos WHERE id = ? AND usuario = ?", (id_l, usuario_ativo))
+                    if id_l is not None:
+                        cursor.execute("DELETE FROM lancamentos WHERE id = %s AND usuario = %s" if DATABASE_URL else "DELETE FROM lancamentos WHERE id = ? AND usuario = ?", (id_l, usuario_ativo))
+                    else:
+                        cursor.execute("DELETE FROM lancamentos WHERE usuario = %s AND descricao = %s AND valor = %s" if DATABASE_URL else "DELETE FROM lancamentos WHERE usuario = ? AND descricao = ? AND valor = ?", (usuario_ativo, d, v))
                     conexao.commit()
                     cursor.close()
                     conexao.close()
@@ -306,3 +306,4 @@ else:
                     st.rerun()
     else:
         st.info("Nenhum lançamento encontrado para este mês.")
+
