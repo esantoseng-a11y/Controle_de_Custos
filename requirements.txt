@@ -1,2 +1,6 @@
 streamlit
 python-dateutil
+streamlit
+python-dateutil
+psycopg2-binary
+
