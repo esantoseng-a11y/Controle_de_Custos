@@ -282,8 +282,8 @@ else:
 
     st.divider()
 
-    # --- NOVO LANÇAMENTO (MANUAL OU SCANNER DE COMPROVANTE) ---
-    aba_manual, aba_ocr = st.tabs(["✍️ Manual", "📷 Escanear Comprovante"])
+    # --- NOVO LANÇAMENTO (MANUAL OU SCANNER DE COMPROVANTE/IMAGENS) ---
+    aba_manual, aba_ocr = st.tabs(["✍️ Manual", "📷 Escanear Imagem/Comprovante"])
 
     with aba_manual:
         st.subheader("➕ Novo Lançamento Manual")
@@ -325,20 +325,20 @@ else:
                     st.success("Lançamento salvo com sucesso!")
                     st.rerun()
 
-    # --- OPÇÃO 2: ESCANEAR POR FOTO DA CÂMERA OU ARQUIVO ---
+    # --- OPÇÃO 2: ESCANEAR LINHA A LINHA COM VALORES NUMÉRICOS ---
     with aba_ocr:
-        st.subheader("📷 Extrair Dados de Nota/Comprovante")
-        st.caption("Tire uma foto com a câmera ou escolha um arquivo do dispositivo.")
+        st.subheader("📷 Extrair Linhas com Valores Numéricos")
+        st.caption("Envie uma foto de um recibo, fatura ou nota. A IA extrairá apenas os itens que possuem valor numérico.")
 
         arquivo_imagem = st.file_uploader(
-            "Tire uma foto ou selecione do dispositivo", 
+            "Selecione uma imagem do comprovante ou produto", 
             type=["jpg", "jpeg", "png", "webp"]
         )
         
         if arquivo_imagem:
             st.image(arquivo_imagem, caption="Imagem carregada", use_container_width=True)
             
-            if st.button("🔍 Escanear e Extrair Informações", type="primary"):
+            if st.button("🔍 Processar Imagem e Extrair Itens", type="primary"):
                 api_key = os.getenv("GEMINI_API_KEY")
                 
                 if not GEMINI_DISPONIVEL:
@@ -346,22 +346,32 @@ else:
                 elif not api_key:
                     st.error("Variável GEMINI_API_KEY não configurada no Render/Ambiente.")
                 else:
-                    with st.spinner("Analisando imagem com IA..."):
+                    with st.spinner("Analisando imagem e extraindo linhas com valores..."):
                         try:
                             client = genai.Client(api_key=api_key)
                             img = Image.open(arquivo_imagem)
                             
                             prompt = """
-                            Analise este comprovante/recibo financeiro e retorne EXATAMENTE um JSON com as seguintes chaves:
-                            - "descricao": nome do estabelecimento ou beneficiário (ex: Supermercado X, Posto Y)
-                            - "valor": valor total numérico float (ex: 45.90)
-                            - "data": data no formato YYYY-MM-DD. Se não encontrar, use a data de hoje.
-                            - "tipo": "Despesa" ou "Receita" (quase sempre Despesa)
+                            Analise a imagem fornecida (comprovante, nota, recibo ou extrato).
+                            Identifique TODAS as linhas ou itens que possuem um VALOR NUMÉRICO associado (preço, custo, taxa, etc.).
+                            Ignore linhas que sejam apenas textos, cabeçalhos ou sem valores.
 
-                            Responda estritamente o JSON sem marcações markdown extra de código.
+                            Retorne EXATAMENTE um JSON com o seguinte formato:
+                            {
+                              "data_geral": "YYYY-MM-DD",
+                              "itens": [
+                                {
+                                  "descricao": "nome do item ou descrição da linha",
+                                  "valor": 12.50,
+                                  "tipo": "Despesa"
+                                }
+                              ]
+                            }
+
+                            Se não encontrar a data, use a data de hoje.
+                            Responda estritamente o JSON válido, sem formatações adicionais de markdown.
                             """
 
-                            # Modelo atualizado aqui:
                             resposta = client.models.generate_content(
                                 model='gemini-1.5-flash',
                                 contents=[img, prompt]
@@ -370,45 +380,59 @@ else:
                             texto_limpo = resposta.text.replace("```json", "").replace("```", "").strip()
                             dados = json.loads(texto_limpo)
                             
-                            st.session_state["ocr_dados"] = dados
-                            st.success("Dados extraídos com sucesso! Revise e confirme abaixo.")
+                            st.session_state["ocr_dados_itens"] = dados
+                            st.success(f"{len(dados.get('itens', []))} item(ns) encontrado(s)! Revise antes de lançar.")
 
                         except Exception as e:
                             st.error(f"Erro ao analisar comprovante: {e}")
 
-        # Se os dados foram extraídos, exibe o formulário de confirmação pré-preenchido
-        if "ocr_dados" in st.session_state and st.session_state["ocr_dados"]:
-            d_ocr = st.session_state["ocr_dados"]
-            st.divider()
-            st.write("### Confirmar Lançamento Extraído")
-            
-            with st.form("form_ocr_confirmar"):
-                desc_ocr = st.text_input("Descrição Extraída", value=d_ocr.get("descricao", "Gasto"))
-                val_ocr = st.number_input("Valor Extraído (R$)", value=float(d_ocr.get("valor", 0.0)), step=0.01)
-                
-                try:
-                    dt_parse = datetime.strptime(d_ocr.get("data", ""), "%Y-%m-%d")
-                except ValueError:
-                    dt_parse = datetime.now()
-                    
-                dt_ocr = st.date_input("Data Extraída", value=dt_parse)
-                cartao_ocr = st.selectbox("Conta/Cartão", cartoes if cartoes else ["Sem conta cadastrada"], key="c_ocr")
-                tipo_ocr = st.radio("Tipo", ["Despesa", "Receita"], index=0 if d_ocr.get("tipo") == "Despesa" else 1, horizontal=True, key="t_ocr")
+        # Se itens foram extraídos, mostra para confirmação em lote
+        if "ocr_dados_itens" in st.session_state and st.session_state["ocr_dados_itens"]:
+            dados_extraidos = st.session_state["ocr_dados_itens"]
+            lista_itens = dados_extraidos.get("itens", [])
+            data_geral_str = dados_extraidos.get("data_geral", datetime.now().strftime("%Y-%m-%d"))
 
-                if st.form_submit_button("💾 Confirmar e Salvar Lançamento", type="primary"):
-                    m_fmt = dt_ocr.strftime("%m/%Y")
-                    d_fmt = dt_ocr.strftime("%d/%m/%Y")
+            try:
+                dt_padrao = datetime.strptime(data_geral_str, "%Y-%m-%d")
+            except ValueError:
+                dt_padrao = datetime.now()
+
+            st.divider()
+            st.write("### 📝 Itens Detectados para Lançamento")
+            
+            with st.form("form_ocr_multiplos"):
+                dt_lanc = st.date_input("Data dos Lançamentos", value=dt_padrao)
+                cartao_ocr = st.selectbox("Conta/Cartão", cartoes if cartoes else ["Sem conta cadastrada"], key="c_ocr_multi")
+                
+                itens_confirmados = []
+                for idx, item in enumerate(lista_itens):
+                    c_desc, c_val, c_tipo = st.columns([3, 2, 2])
+                    desc_i = c_desc.text_input(f"Descrição #{idx+1}", value=item.get("descricao", "Item"), key=f"desc_ocr_{idx}")
+                    val_i = c_val.number_input(f"Valor #{idx+1} (R$)", value=float(item.get("valor", 0.0)), step=0.01, key=f"val_ocr_{idx}")
+                    tipo_i = c_tipo.selectbox(f"Tipo #{idx+1}", ["Despesa", "Receita"], index=0 if item.get("tipo") == "Despesa" else 1, key=f"tipo_ocr_{idx}")
+                    
+                    itens_confirmados.append({"descricao": desc_i, "valor": val_i, "tipo": tipo_i})
+
+                if st.form_submit_button("💾 Salvar Todos os Itens Extraídos", type="primary"):
+                    m_fmt = dt_lanc.strftime("%m/%Y")
+                    d_fmt = dt_lanc.strftime("%d/%m/%Y")
                     
                     conexao = get_conexao()
                     cursor = conexao.cursor()
                     sql_insert = "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)" if DATABASE_URL else "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                    cursor.execute(sql_insert, (usuario_ativo, d_fmt, m_fmt, tipo_ocr, cartao_ocr, desc_ocr, val_ocr, "Pago", "Via OCR Scanner"))
+                    
+                    qtd_salva = 0
+                    for item in itens_confirmados:
+                        if item["valor"] > 0 and item["descricao"].strip():
+                            cursor.execute(sql_insert, (usuario_ativo, d_fmt, m_fmt, item["tipo"], cartao_ocr, item["descricao"].strip(), item["valor"], "Pago", "Via Scanner de Imagem"))
+                            qtd_salva += 1
+
                     conexao.commit()
                     cursor.close()
                     conexao.close()
                     
-                    del st.session_state["ocr_dados"]
-                    st.success("Lançamento salvo com sucesso!")
+                    del st.session_state["ocr_dados_itens"]
+                    st.success(f"{qtd_salva} lançamento(s) salvos com sucesso!")
                     st.rerun()
 
     # --- LISTA E EDICÃO DOS LANÇAMENTOS ---
