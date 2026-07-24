@@ -1,8 +1,17 @@
 import os
+import json
 import sqlite3
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import streamlit as st
+from PIL import Image
+
+# Importação da biblioteca oficial do Gemini para processar imagens (OCR)
+try:
+    from google import genai
+    GEMINI_DISPONIVEL = True
+except ImportError:
+    GEMINI_DISPONIVEL = False
 
 st.set_page_config(page_title="Controle de Custos", page_icon="💰", layout="centered")
 
@@ -21,7 +30,6 @@ def inicializar_banco():
     conexao = get_conexao()
     cursor = conexao.cursor()
     
-    # Adicionadas colunas para recuperação de senha (pergunta e resposta)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id SERIAL PRIMARY KEY,
@@ -57,7 +65,6 @@ def inicializar_banco():
     cursor.close()
     conexao.close()
 
-# Executa as migrations simples se o banco for SQLite local antigo sem as colunas novas
 def ajustar_schema():
     if not DATABASE_URL:
         conexao = get_conexao()
@@ -67,7 +74,7 @@ def ajustar_schema():
             cursor.execute("ALTER TABLE usuarios ADD COLUMN resposta_sec TEXT")
             conexao.commit()
         except sqlite3.OperationalError:
-            pass # Colunas já existem
+            pass
         finally:
             cursor.close()
             conexao.close()
@@ -78,9 +85,9 @@ ajustar_schema()
 # --- SISTEMA DE MANTER LOGADO VIA QUERY PARAMS ---
 query_params = st.query_params
 
-if "usuario_logado" not in st.session_state:
-    if "user" in query_params:
-        st.session_state["usuario_logado"] = query_params["user"]
+if "usuario_logado" not in st.session_state or not st.session_state["usuario_logado"]:
+    if "user" in query_params and query_params["user"]:
+        st.session_state["usuario_logado"] = str(query_params["user"]).strip().lower()
     else:
         st.session_state["usuario_logado"] = None
 
@@ -88,7 +95,7 @@ if "usuario_logado" not in st.session_state:
 if not st.session_state["usuario_logado"]:
     st.title("💰 Controle de Custos")
     
-    aba1, aba2, aba3 = st.tabs(["🔑 Entrar", "📝 Cadastrar", "🔑 Esqueci a Senha"])
+    aba1, aba2, aba3 = st.tabs(["🔑 Entrar", "📝 Cadastrar", "❓ Esqueci a Senha"])
     
     with aba1:
         u = st.text_input("Usuário", key="login_user")
@@ -104,23 +111,28 @@ if not st.session_state["usuario_logado"]:
             else:
                 conexao = get_conexao()
                 cursor = conexao.cursor()
-                cursor.execute("SELECT usuario FROM usuarios WHERE usuario = %s AND senha = %s" if DATABASE_URL else "SELECT usuario FROM usuarios WHERE usuario = ? AND senha = ?", (usuario_limpo, senha_limpa))
+                cursor.execute(
+                    "SELECT usuario FROM usuarios WHERE LOWER(usuario) = %s AND senha = %s" if DATABASE_URL 
+                    else "SELECT usuario FROM usuarios WHERE LOWER(usuario) = ? AND senha = ?", 
+                    (usuario_limpo, senha_limpa)
+                )
                 valido = cursor.fetchone()
                 cursor.close()
                 conexao.close()
                 
                 if valido:
-                    st.session_state["usuario_logado"] = usuario_limpo
+                    usr_banco = valido[0]
+                    st.session_state["usuario_logado"] = usr_banco
                     if manter_logado:
-                        st.query_params["user"] = usuario_limpo
+                        st.query_params["user"] = usr_banco
                     st.rerun()
                 else:
-                    st.error("Usuário ou senha incorretos.")
+                    st.error("Usuário ou senha incorretos. Verifique se digitou corretamente.")
 
     with aba2:
         u_cad = st.text_input("Novo Usuário", key="cad_user")
         s_cad = st.text_input("Nova Senha", type="password", key="cad_pass")
-        p_cad = st.selectbox("Pergunta de Segurança (para recuperar a senha)", [
+        p_cad = st.selectbox("Pergunta de Segurança", [
             "Qual o nome do seu primeiro animal de estimação?",
             "Qual a sua cidade natal?",
             "Qual o seu livro ou filme favorito?",
@@ -142,9 +154,9 @@ if not st.session_state["usuario_logado"]:
                     conexao.commit()
                     cursor.close()
                     conexao.close()
-                    st.success("Conta criada com sucesso! Acesse a aba 'Entrar' para fazer login.")
+                    st.success("Conta criada com sucesso! Você já pode entrar na aba 'Entrar'.")
                 except Exception:
-                    st.error("Este nome de usuário já está em uso. Escolha outro.")
+                    st.error("Este nome de usuário já existe.")
             else:
                 st.warning("Preencha todos os campos do cadastro.")
 
@@ -154,7 +166,7 @@ if not st.session_state["usuario_logado"]:
             usuario_rec_limpo = u_rec.strip().lower()
             conexao = get_conexao()
             cursor = conexao.cursor()
-            cursor.execute("SELECT pergunta_sec FROM usuarios WHERE usuario = %s" if DATABASE_URL else "SELECT pergunta_sec FROM usuarios WHERE usuario = ?", (usuario_rec_limpo,))
+            cursor.execute("SELECT pergunta_sec FROM usuarios WHERE LOWER(usuario) = %s" if DATABASE_URL else "SELECT pergunta_sec FROM usuarios WHERE LOWER(usuario) = ?", (usuario_rec_limpo,))
             dados_user = cursor.fetchone()
             cursor.close()
             conexao.close()
@@ -171,16 +183,16 @@ if not st.session_state["usuario_logado"]:
                     if resp_rec_limpa and nova_senha_limpa:
                         conexao = get_conexao()
                         cursor = conexao.cursor()
-                        cursor.execute("SELECT id FROM usuarios WHERE usuario = %s AND resposta_sec = %s" if DATABASE_URL else "SELECT id FROM usuarios WHERE usuario = ? AND resposta_sec = ?", (usuario_rec_limpo, resp_rec_limpa))
+                        cursor.execute("SELECT id FROM usuarios WHERE LOWER(usuario) = %s AND LOWER(resposta_sec) = %s" if DATABASE_URL else "SELECT id FROM usuarios WHERE LOWER(usuario) = ? AND LOWER(resposta_sec) = ?", (usuario_rec_limpo, resp_rec_limpa))
                         valido = cursor.fetchone()
 
                         if valido:
-                            sql_up = "UPDATE usuarios SET senha = %s WHERE usuario = %s" if DATABASE_URL else "UPDATE usuarios SET senha = ? WHERE usuario = ?"
+                            sql_up = "UPDATE usuarios SET senha = %s WHERE LOWER(usuario) = %s" if DATABASE_URL else "UPDATE usuarios SET senha = ? WHERE LOWER(usuario) = ?"
                             cursor.execute(sql_up, (nova_senha_limpa, usuario_rec_limpo))
                             conexao.commit()
                             cursor.close()
                             conexao.close()
-                            st.success("Senha alterada com sucesso! Você já pode entrar.")
+                            st.success("Senha alterada com sucesso!")
                         else:
                             cursor.close()
                             conexao.close()
@@ -188,7 +200,7 @@ if not st.session_state["usuario_logado"]:
                     else:
                         st.warning("Preencha a resposta e a nova senha.")
             elif dados_user:
-                st.warning("Este usuário foi cadastrado antes do recurso de recuperação. Entre em contato com o suporte/administrador.")
+                st.warning("Usuário cadastrado sem pergunta de segurança.")
             else:
                 st.error("Usuário não encontrado.")
 
@@ -196,7 +208,6 @@ if not st.session_state["usuario_logado"]:
 else:
     usuario_ativo = st.session_state["usuario_logado"]
     
-    # Cabeçalho com Logout
     col_t, col_l = st.columns([3, 1])
     col_t.title(f"Finanças de {usuario_ativo}")
     
@@ -205,11 +216,10 @@ else:
         st.session_state.clear()
         st.rerun()
 
-    # Função auxiliar de cartões
     def obter_cartoes():
         conexao = get_conexao()
         cursor = conexao.cursor()
-        cursor.execute("SELECT valor FROM configuracoes WHERE usuario = %s AND chave = 'cartoes'" if DATABASE_URL else "SELECT valor FROM configuracoes WHERE usuario = ? AND chave = 'cartoes'", (usuario_ativo,))
+        cursor.execute("SELECT valor FROM configuracoes WHERE LOWER(usuario) = %s AND chave = 'cartoes'" if DATABASE_URL else "SELECT valor FROM configuracoes WHERE LOWER(usuario) = ? AND chave = 'cartoes'", (usuario_ativo,))
         res = cursor.fetchone()
         cursor.close()
         conexao.close()
@@ -256,7 +266,7 @@ else:
     # Resumo Financeiro
     conexao = get_conexao()
     cursor = conexao.cursor()
-    cursor.execute("SELECT tipo, SUM(valor) FROM lancamentos WHERE usuario = %s AND mes_ano = %s GROUP BY tipo" if DATABASE_URL else "SELECT tipo, SUM(valor) FROM lancamentos WHERE usuario = ? AND mes_ano = ? GROUP BY tipo", (usuario_ativo, mes_filtro))
+    cursor.execute("SELECT tipo, SUM(valor) FROM lancamentos WHERE LOWER(usuario) = %s AND mes_ano = %s GROUP BY tipo" if DATABASE_URL else "SELECT tipo, SUM(valor) FROM lancamentos WHERE LOWER(usuario) = ? AND mes_ano = ? GROUP BY tipo", (usuario_ativo, mes_filtro))
     totais = {t: v for t, v in cursor.fetchall()}
     cursor.close()
     conexao.close()
@@ -272,51 +282,140 @@ else:
 
     st.divider()
 
-    # Formulário de Lançamento
-    st.subheader("➕ Novo Lançamento")
-    with st.form("form_lancamento", clear_on_submit=True):
-        desc = st.text_input("Descrição")
-        val = st.number_input("Valor (R$)", min_value=0.0, step=0.01)
-        dt = st.date_input("Data do Gasto", datetime.now())
-        cartao_sel = st.selectbox("Conta/Cartão", cartoes if cartoes else ["Sem conta cadastrada"])
-        tipo_cob = st.radio("Tipo de Cobrança", ["Única", "Parcelado"], horizontal=True)
-        
-        num_p = st.number_input("Número de Parcelas", min_value=1, value=2) if tipo_cob == "Parcelado" else 1
-        tipo_mov = st.radio("Tipo de Lançamento", ["Despesa", "Receita"], horizontal=True)
-        submit = st.form_submit_button("Salvar Lançamento", type="primary")
+    # --- NOVO LANÇAMENTO (MANUAL OU SCANNER DE COMPROVANTE) ---
+    aba_manual, aba_ocr = st.tabs(["✍️ Manual", "📷 Escanear Comprovante"])
 
-        if submit:
-            if not desc or val <= 0:
-                st.error("Preencha a descrição e o valor corretamente.")
-            else:
-                conexao = get_conexao()
-                cursor = conexao.cursor()
-                sql_insert = "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)" if DATABASE_URL else "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-                
-                if tipo_cob == "Parcelado":
-                    data_curr = dt
-                    for i in range(1, int(num_p) + 1):
-                        m_fmt = data_curr.strftime("%m/%Y")
-                        d_fmt = data_curr.strftime("%d/%m/%Y")
-                        desc_p = f"{desc} ({i:02d}/{int(num_p):02d})"
-                        cursor.execute(sql_insert, (usuario_ativo, d_fmt, m_fmt, tipo_mov, cartao_sel, desc_p, val, "Pago", ""))
-                        data_curr += relativedelta(months=1)
+    with aba_manual:
+        st.subheader("➕ Novo Lançamento Manual")
+        with st.form("form_lancamento", clear_on_submit=True):
+            desc = st.text_input("Descrição")
+            val = st.number_input("Valor (R$)", min_value=0.0, step=0.01)
+            dt = st.date_input("Data do Gasto", datetime.now())
+            cartao_sel = st.selectbox("Conta/Cartão", cartoes if cartoes else ["Sem conta cadastrada"], key="c_manual")
+            tipo_cob = st.radio("Tipo de Cobrança", ["Única", "Parcelado"], horizontal=True)
+            
+            num_p = st.number_input("Número de Parcelas", min_value=1, value=2) if tipo_cob == "Parcelado" else 1
+            tipo_mov = st.radio("Tipo de Lançamento", ["Despesa", "Receita"], horizontal=True)
+            submit = st.form_submit_button("Salvar Lançamento", type="primary")
+
+            if submit:
+                if not desc or val <= 0:
+                    st.error("Preencha a descrição e o valor corretamente.")
                 else:
-                    m_fmt = dt.strftime("%m/%Y")
-                    d_fmt = dt.strftime("%d/%m/%Y")
-                    cursor.execute(sql_insert, (usuario_ativo, d_fmt, m_fmt, tipo_mov, cartao_sel, desc, val, "Pago", ""))
-                
-                conexao.commit()
-                cursor.close()
-                conexao.close()
-                st.success("Lançamento salvo com sucesso!")
-                st.rerun()
+                    conexao = get_conexao()
+                    cursor = conexao.cursor()
+                    sql_insert = "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)" if DATABASE_URL else "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    
+                    if tipo_cob == "Parcelado":
+                        data_curr = dt
+                        for i in range(1, int(num_p) + 1):
+                            m_fmt = data_curr.strftime("%m/%Y")
+                            d_fmt = data_curr.strftime("%d/%m/%Y")
+                            desc_p = f"{desc} ({i:02d}/{int(num_p):02d})"
+                            cursor.execute(sql_insert, (usuario_ativo, d_fmt, m_fmt, tipo_mov, cartao_sel, desc_p, val, "Pago", ""))
+                            data_curr += relativedelta(months=1)
+                    else:
+                        m_fmt = dt.strftime("%m/%Y")
+                        d_fmt = dt.strftime("%d/%m/%Y")
+                        cursor.execute(sql_insert, (usuario_ativo, d_fmt, m_fmt, tipo_mov, cartao_sel, desc, val, "Pago", ""))
+                    
+                    conexao.commit()
+                    cursor.close()
+                    conexao.close()
+                    st.success("Lançamento salvo com sucesso!")
+                    st.rerun()
 
-    # Lista e Edição de Lançamentos
+    # --- OPÇÃO 2: ESCANEAR POR FOTO DA CÂMERA OU ARQUIVO ---
+    with aba_ocr:
+        st.subheader("📷 Extrair Dados de Nota/Comprovante")
+        st.caption("Tire uma foto com a câmera ou escolha um arquivo do dispositivo.")
+
+        # Opção 2: Permite usar a câmera diretamente no celular ou anexar imagem
+        arquivo_imagem = st.file_uploader(
+            "Tire uma foto ou selecione do dispositivo", 
+            type=["jpg", "jpeg", "png", "webp"]
+        )
+        
+        if arquivo_imagem:
+            st.image(arquivo_imagem, caption="Imagem carregada", use_container_width=True)
+            
+            if st.button("🔍 Escanear e Extrair Informações", type="primary"):
+                api_key = os.getenv("GEMINI_API_KEY")
+                
+                if not GEMINI_DISPONIVEL:
+                    st.error("Biblioteca 'google-genai' não instalada. Adicione ao requirements.txt.")
+                elif not api_key:
+                    st.error("Variável GEMINI_API_KEY não configurada no Render/Ambiente.")
+                else:
+                    with st.spinner("Analisando imagem com IA..."):
+                        try:
+                            client = genai.Client(api_key=api_key)
+                            img = Image.open(arquivo_imagem)
+                            
+                            prompt = """
+                            Analise este comprovante/recibo financeiro e retorne EXATAMENTE um JSON com as seguintes chaves:
+                            - "descricao": nome do estabelecimento ou beneficiário (ex: Supermercado X, Posto Y)
+                            - "valor": valor total numérico float (ex: 45.90)
+                            - "data": data no formato YYYY-MM-DD. Se não encontrar, use a data de hoje.
+                            - "tipo": "Despesa" ou "Receita" (quase sempre Despesa)
+
+                            Responda estritamente o JSON sem marcações markdown extra de código.
+                            """
+
+                            resposta = client.models.generate_content(
+                                model='gemini-2.5-flash',
+                                contents=[img, prompt]
+                            )
+                            
+                            texto_limpo = resposta.text.replace("```json", "").replace("```", "").strip()
+                            dados = json.loads(texto_limpo)
+                            
+                            st.session_state["ocr_dados"] = dados
+                            st.success("Dados extraídos com sucesso! Revise e confirme abaixo.")
+
+                        except Exception as e:
+                            st.error(f"Erro ao analisar comprovante: {e}")
+
+        # Se os dados foram extraídos, exibe o formulário de confirmação pré-preenchido
+        if "ocr_dados" in st.session_state and st.session_state["ocr_dados"]:
+            d_ocr = st.session_state["ocr_dados"]
+            st.divider()
+            st.write("### Confirmar Lançamento Extraído")
+            
+            with st.form("form_ocr_confirmar"):
+                desc_ocr = st.text_input("Descrição Extraída", value=d_ocr.get("descricao", "Gasto"))
+                val_ocr = st.number_input("Valor Extraído (R$)", value=float(d_ocr.get("valor", 0.0)), step=0.01)
+                
+                try:
+                    dt_parse = datetime.strptime(d_ocr.get("data", ""), "%Y-%m-%d")
+                except ValueError:
+                    dt_parse = datetime.now()
+                    
+                dt_ocr = st.date_input("Data Extraída", value=dt_parse)
+                cartao_ocr = st.selectbox("Conta/Cartão", cartoes if cartoes else ["Sem conta cadastrada"], key="c_ocr")
+                tipo_ocr = st.radio("Tipo", ["Despesa", "Receita"], index=0 if d_ocr.get("tipo") == "Despesa" else 1, horizontal=True, key="t_ocr")
+
+                if st.form_submit_button("💾 Confirmar e Salvar Lançamento", type="primary"):
+                    m_fmt = dt_ocr.strftime("%m/%Y")
+                    d_fmt = dt_ocr.strftime("%d/%m/%Y")
+                    
+                    conexao = get_conexao()
+                    cursor = conexao.cursor()
+                    sql_insert = "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)" if DATABASE_URL else "INSERT INTO lancamentos (usuario, data, mes_ano, tipo, cartao, descricao, valor, status, observacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    cursor.execute(sql_insert, (usuario_ativo, d_fmt, m_fmt, tipo_ocr, cartao_ocr, desc_ocr, val_ocr, "Pago", "Via OCR Scanner"))
+                    conexao.commit()
+                    cursor.close()
+                    conexao.close()
+                    
+                    del st.session_state["ocr_dados"]
+                    st.success("Lançamento salvo com sucesso!")
+                    st.rerun()
+
+    # --- LISTA E EDICÃO DOS LANÇAMENTOS (MANTIDO CONFORME SOLICITADO) ---
     st.subheader(f"📋 Lançamentos de {mes_filtro}")
     conexao = get_conexao()
     cursor = conexao.cursor()
-    cursor.execute("SELECT id, descricao, valor, tipo, cartao, data FROM lancamentos WHERE usuario = %s AND mes_ano = %s ORDER BY id DESC" if DATABASE_URL else "SELECT id, descricao, valor, tipo, cartao, data FROM lancamentos WHERE usuario = ? AND mes_ano = ? ORDER BY id DESC", (usuario_ativo, mes_filtro))
+    cursor.execute("SELECT id, descricao, valor, tipo, cartao, data FROM lancamentos WHERE LOWER(usuario) = %s AND mes_ano = %s ORDER BY id DESC" if DATABASE_URL else "SELECT id, descricao, valor, tipo, cartao, data FROM lancamentos WHERE LOWER(usuario) = ? AND mes_ano = ? ORDER BY id DESC", (usuario_ativo, mes_filtro))
     itens = cursor.fetchall()
     cursor.close()
     conexao.close()
@@ -355,10 +454,10 @@ else:
                             cursor = conexao.cursor()
                             
                             if id_l is not None:
-                                sql_update = "UPDATE lancamentos SET descricao = %s, valor = %s, data = %s, mes_ano = %s, cartao = %s, tipo = %s WHERE id = %s AND usuario = %s" if DATABASE_URL else "UPDATE lancamentos SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ? WHERE id = ? AND usuario = ?"
+                                sql_update = "UPDATE lancamentos SET descricao = %s, valor = %s, data = %s, mes_ano = %s, cartao = %s, tipo = %s WHERE id = %s AND LOWER(usuario) = %s" if DATABASE_URL else "UPDATE lancamentos SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ? WHERE id = ? AND LOWER(usuario) = ?"
                                 cursor.execute(sql_update, (edit_desc, edit_val, nova_d_fmt, nova_m_fmt, edit_cartao, edit_tipo, id_l, usuario_ativo))
                             else:
-                                sql_update = "UPDATE lancamentos SET descricao = %s, valor = %s, data = %s, mes_ano = %s, cartao = %s, tipo = %s WHERE usuario = %s AND descricao = %s AND valor = %s" if DATABASE_URL else "UPDATE lancamentos SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ? WHERE usuario = ? AND descricao = ? AND valor = ?"
+                                sql_update = "UPDATE lancamentos SET descricao = %s, valor = %s, data = %s, mes_ano = %s, cartao = %s, tipo = %s WHERE LOWER(usuario) = %s AND descricao = %s AND valor = %s" if DATABASE_URL else "UPDATE lancamentos SET descricao = ?, valor = ?, data = ?, mes_ano = ?, cartao = ?, tipo = ? WHERE LOWER(usuario) = ? AND descricao = ? AND valor = ?"
                                 cursor.execute(sql_update, (edit_desc, edit_val, nova_d_fmt, nova_m_fmt, edit_cartao, edit_tipo, usuario_ativo, d, v))
                                 
                             conexao.commit()
@@ -371,9 +470,9 @@ else:
                     conexao = get_conexao()
                     cursor = conexao.cursor()
                     if id_l is not None:
-                        cursor.execute("DELETE FROM lancamentos WHERE id = %s AND usuario = %s" if DATABASE_URL else "DELETE FROM lancamentos WHERE id = ? AND usuario = ?", (id_l, usuario_ativo))
+                        cursor.execute("DELETE FROM lancamentos WHERE id = %s AND LOWER(usuario) = %s" if DATABASE_URL else "DELETE FROM lancamentos WHERE id = ? AND LOWER(usuario) = ?", (id_l, usuario_ativo))
                     else:
-                        cursor.execute("DELETE FROM lancamentos WHERE usuario = %s AND descricao = %s AND valor = %s" if DATABASE_URL else "DELETE FROM lancamentos WHERE usuario = ? AND descricao = ? AND valor = ?", (usuario_ativo, d, v))
+                        cursor.execute("DELETE FROM lancamentos WHERE LOWER(usuario) = %s AND descricao = %s AND valor = %s" if DATABASE_URL else "DELETE FROM lancamentos WHERE LOWER(usuario) = ? AND descricao = ? AND valor = ?", (usuario_ativo, d, v))
                     conexao.commit()
                     cursor.close()
                     conexao.close()
@@ -381,3 +480,4 @@ else:
                     st.rerun()
     else:
         st.info("Nenhum lançamento encontrado para este mês.")
+
