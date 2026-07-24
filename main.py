@@ -330,7 +330,6 @@ else:
         st.subheader("📷 Extrair Dados de Nota/Comprovante")
         st.caption("Tire uma foto com a câmera ou escolha um arquivo do dispositivo.")
 
-        # Opção 2: Permite usar a câmera diretamente no celular ou anexar imagem
         arquivo_imagem = st.file_uploader(
             "Tire uma foto ou selecione do dispositivo", 
             type=["jpg", "jpeg", "png", "webp"]
@@ -362,8 +361,9 @@ else:
                             Responda estritamente o JSON sem marcações markdown extra de código.
                             """
 
+                            # Modelo atualizado aqui:
                             resposta = client.models.generate_content(
-                                model='gemini-2.5-flash',
+                                model='gemini-1.5-flash',
                                 contents=[img, prompt]
                             )
                             
@@ -411,7 +411,7 @@ else:
                     st.success("Lançamento salvo com sucesso!")
                     st.rerun()
 
-    # --- LISTA E EDICÃO DOS LANÇAMENTOS (MANTIDO CONFORME SOLICITADO) ---
+    # --- LISTA E EDICÃO DOS LANÇAMENTOS ---
     st.subheader(f"📋 Lançamentos de {mes_filtro}")
     conexao = get_conexao()
     cursor = conexao.cursor()
@@ -480,4 +480,3 @@ else:
                     st.rerun()
     else:
         st.info("Nenhum lançamento encontrado para este mês.")
-
