@@ -1,9 +1,9 @@
+
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import streamlit as st
-import extra_streamlit_components as stx
 
 st.set_page_config(page_title="Controle de Custos", page_icon="💰", layout="centered")
 
@@ -13,7 +13,6 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 def get_conexao():
     if DATABASE_URL:
         import psycopg2
-        # No Render a URL pode vir como postgres://, ajustamos para postgresql://
         url = DATABASE_URL.replace("postgres://", "postgresql://")
         return psycopg2.connect(url)
     else:
@@ -23,7 +22,6 @@ def inicializar_banco():
     conexao = get_conexao()
     cursor = conexao.cursor()
     
-    # Sintaxe adaptada para PostgreSQL / SQLite
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
             id SERIAL PRIMARY KEY,
@@ -59,17 +57,15 @@ def inicializar_banco():
 
 inicializar_banco()
 
-# --- GERENCIADOR DE COOKIES (Manter Logado) ---
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
+# --- SISTEMA DE MANTER LOGADO VIA QUERY PARAMS (Sem bibliotecas extras) ---
+query_params = st.query_params
 
-cookie_manager = get_cookie_manager()
-
-# Tenta carregar usuário do Cookie se não estiver no session_state
 if "usuario_logado" not in st.session_state:
-    usuario_cookie = cookie_manager.get(cookie="usuario_logado")
-    st.session_state["usuario_logado"] = usuario_cookie if usuario_cookie else None
+    # Se o parâmetro 'user' estiver na URL, loga automaticamente
+    if "user" in query_params:
+        st.session_state["usuario_logado"] = query_params["user"]
+    else:
+        st.session_state["usuario_logado"] = None
 
 # --- TELA DE LOGIN / CADASTRO ---
 if not st.session_state["usuario_logado"]:
@@ -80,6 +76,7 @@ if not st.session_state["usuario_logado"]:
     with aba1:
         u = st.text_input("Usuário", key="login_user")
         s = st.text_input("Senha", type="password", key="login_pass")
+        manter_logado = st.checkbox("Manter-me conectado neste aparelho", value=True)
         
         if st.button("Entrar", type="primary", use_container_width=True):
             usuario_limpo = u.strip().lower()
@@ -94,9 +91,8 @@ if not st.session_state["usuario_logado"]:
             
             if valido:
                 st.session_state["usuario_logado"] = usuario_limpo
-                # Salva o cookie no navegador por 30 dias
-                validade = datetime.now() + timedelta(days=30)
-                cookie_manager.set("usuario_logado", usuario_limpo, expires_at=validade)
+                if manter_logado:
+                    st.query_params["user"] = usuario_limpo
                 st.rerun()
             else:
                 st.error("Usuário ou senha incorretos.")
@@ -131,7 +127,7 @@ else:
     col_t.title(f"Finanças de {usuario_ativo}")
     
     if col_l.button("Sair"):
-        cookie_manager.delete("usuario_logado")
+        st.query_params.clear()
         st.session_state.clear()
         st.rerun()
 
