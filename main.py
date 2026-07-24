@@ -1,17 +1,24 @@
 import os
 import json
+import re
 import sqlite3
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 import streamlit as st
 from PIL import Image
 
-# Importação da biblioteca oficial do Gemini para processar imagens (OCR)
+# Importação com tratamento de compatibilidade
 try:
     from google import genai
-    GEMINI_DISPONIVEL = True
+    NOVO_SDK = True
 except ImportError:
-    GEMINI_DISPONIVEL = False
+    NOVO_SDK = False
+
+try:
+    import google.generativeai as legacy_genai
+    SDK_ANTIGO = True
+except ImportError:
+    SDK_ANTIGO = False
 
 st.set_page_config(page_title="Controle de Custos", page_icon="💰", layout="centered")
 
@@ -341,16 +348,14 @@ else:
             if st.button("🔍 Processar Imagem e Extrair Itens", type="primary"):
                 api_key = os.getenv("GEMINI_API_KEY")
                 
-                if not GEMINI_DISPONIVEL:
-                    st.error("Biblioteca 'google-genai' não instalada. Adicione ao requirements.txt.")
+                if not (NOVO_SDK or SDK_ANTIGO):
+                    st.error("Nenhuma biblioteca 'google-genai' ou 'google-generativeai' está instalada.")
                 elif not api_key:
                     st.error("Variável GEMINI_API_KEY não configurada no Render/Ambiente.")
                 else:
                     with st.spinner("Analisando imagem e extraindo linhas com valores..."):
                         try:
-                            client = genai.Client(api_key=api_key)
                             img = Image.open(arquivo_imagem)
-                            
                             prompt = """
                             Analise a imagem fornecida (comprovante, nota, recibo ou extrato).
                             Identifique TODAS as linhas ou itens que possuem um VALOR NUMÉRICO associado (preço, custo, taxa, etc.).
@@ -369,16 +374,51 @@ else:
                             }
 
                             Se não encontrar a data, use a data de hoje.
-                            Responda estritamente o JSON válido, sem formatações adicionais de markdown.
+                            Responda estritamente o JSON válido.
                             """
 
-                            resposta = client.models.generate_content(
-                                model='gemini-1.5-flash',
-                                contents=[img, prompt]
-                            )
-                            
-                            texto_limpo = resposta.text.replace("```json", "").replace("```", "").strip()
-                            dados = json.loads(texto_limpo)
+                            texto_resposta = None
+
+                            # Tativa 1: Usando a biblioteca nova (google-genai)
+                            if NOVO_SDK:
+                                client = genai.Client(api_key=api_key)
+                                modelos_tentativa = ['gemini-2.5-flash', 'gemini-1.5-flash']
+                                
+                                for mod in modelos_tentativa:
+                                    try:
+                                        res = client.models.generate_content(model=mod, contents=[img, prompt])
+                                        texto_resposta = res.text
+                                        if texto_resposta:
+                                            break
+                                    except Exception:
+                                        continue
+
+                            # Tentativa 2: Usando a biblioteca legada se a nova falhar ou não estiver disponível
+                            if not texto_resposta and SDK_ANTIGO:
+                                legacy_genai.configure(api_key=api_key)
+                                modelos_legacy = ['gemini-1.5-flash', 'gemini-pro-vision']
+                                
+                                for mod in modelos_legacy:
+                                    try:
+                                        model_inst = legacy_genai.GenerativeModel(mod)
+                                        res = model_inst.generate_content([prompt, img])
+                                        texto_resposta = res.text
+                                        if texto_resposta:
+                                            break
+                                    except Exception:
+                                        continue
+
+                            if not texto_resposta:
+                                raise Exception("Não foi possível conectar a nenhum modelo da Google API.")
+
+                            # Extração Segura do JSON via Regex
+                            json_match = re.search(r'\{.*\}', texto_resposta, re.DOTALL)
+                            if json_match:
+                                json_str = json_match.group(0)
+                            else:
+                                json_str = texto_resposta.strip()
+
+                            dados = json.loads(json_str)
                             
                             st.session_state["ocr_dados_itens"] = dados
                             st.success(f"{len(dados.get('itens', []))} item(ns) encontrado(s)! Revise antes de lançar.")
