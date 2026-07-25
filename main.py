@@ -1,4 +1,3 @@
-                            
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
@@ -13,8 +12,12 @@ st.set_page_config(page_title="Finanças de Luna", page_icon="💰", layout="wid
 # ==========================================
 # 2. GERENCIAMENTO DE SESSÃO E LOGIN (365 DIAS)
 # ==========================================
-# Inicializa o gerenciador de cookies
-cookie_manager = stx.get_cookie_manager()
+# Instanciação correta do CookieManager
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
 
 # Defina aqui o usuário e senha desejados
 USUARIO_CORRETO = "luna"
@@ -26,10 +29,11 @@ if "autenticado" not in st.session_state:
 if "transacoes" not in st.session_state:
     st.session_state["transacoes"] = []
 
-# Verifica se existe o cookie de login no navegador
-auth_cookie = cookie_manager.get(cookie="financas_luna_login")
+# Obtém todos os cookies salvos no navegador
+cookies = cookie_manager.get_all()
 
-if auth_cookie == "logado_sucesso":
+# Verifica se o cookie de login existe e é válido
+if cookies and cookies.get("financas_luna_login") == "logado_sucesso":
     st.session_state["autenticado"] = True
 
 
@@ -141,3 +145,4 @@ if not df_transacoes.empty:
     st.dataframe(df_transacoes, use_container_width=True)
 else:
     st.info("Nenhuma transação cadastrada até o momento.")
+
